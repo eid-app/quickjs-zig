@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { mkdirSync, existsSync, writeFileSync, chmodSync, unlinkSync } from 'fs';
+import { mkdirSync, existsSync, writeFileSync, chmodSync, unlinkSync, renameSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import https from 'https';
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZIG_VERSION = '0.15.2';
 const BIN_DIR = path.resolve(__dirname, 'bin', 'zig');
+const QUICKJS_DIR = path.resolve(__dirname, 'quickjs');
 
 // Mapping for Zig download URLs
 const platformMap = {
@@ -30,12 +31,15 @@ if (!platform || !arch) {
     process.exit(1);
 }
 
-// Fixed: Correct Zig URL order is arch-platform (e.g., x86_64-macos)
+// Zig download configuration
 const zigTarget = `${arch}-${platform}`;
 const zigFileName = `zig-${zigTarget}-${ZIG_VERSION}.${platform === 'windows' ? 'zip' : 'tar.xz'}`;
 const zigUrl = `https://ziglang.org/download/${ZIG_VERSION}/${zigFileName}`;
-
 const ZIG_BIN_PATH = path.join(BIN_DIR, platform === 'windows' ? 'zig.exe' : 'zig');
+
+// QuickJS source configuration (using zip for windows, tar.gz for unix)
+const qjsExt = platform === 'windows' ? 'zip' : 'tar.gz';
+const qjsUrl = `https://github.com/bellard/quickjs/archive/refs/heads/master.${qjsExt}`;
 
 // --- DOWNLOAD HELPER ---
 const downloadFile = (url, dest) => {
@@ -62,13 +66,30 @@ const downloadFile = (url, dest) => {
 async function install() {
     console.log("=== POSTINSTALL: INITIALIZING PROJECT DEPENDENCIES ===");
 
-    // 1. Initialize Git Submodules (QuickJS source)
-    try {
-        console.log("📂 Initializing git submodules...");
-        execSync('git submodule update --init --recursive', { stdio: 'inherit' });
-        console.log("✅ Submodules initialized.");
-    } catch (err) {
-        console.warn("⚠️ Git submodule update failed. Ensure you are in a git repository or have QuickJS sources.");
+    // 1. Download QuickJS source
+    if (!existsSync(QUICKJS_DIR)) {
+        try {
+            console.log(`📥 Downloading QuickJS source (${qjsExt})...`);
+            const qjsArchive = path.resolve(__dirname, `qjs.${qjsExt}`);
+            await downloadFile(qjsUrl, qjsArchive);
+
+            if (platform === 'windows') {
+                execSync(`powershell -command "Expand-Archive -Path '${qjsArchive}' -DestinationPath '${__dirname}' -Force"`);
+            } else {
+                execSync(`tar -xzf "${qjsArchive}" -C "${__dirname}"`);
+            }
+
+            const extractedDir = path.resolve(__dirname, 'quickjs-master');
+            if (existsSync(extractedDir)) {
+                renameSync(extractedDir, QUICKJS_DIR);
+            }
+            if (existsSync(qjsArchive)) unlinkSync(qjsArchive);
+            console.log("✅ QuickJS sources installed.");
+        } catch (err) {
+            console.error(`❌ Failed to install QuickJS: ${err.message}`);
+        }
+    } else {
+        console.log(`✅ QuickJS source already downloaded.`);
     }
 
     // 2. Install Zig Compiler

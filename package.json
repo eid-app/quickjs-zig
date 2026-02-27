@@ -1,6 +1,6 @@
 {
   "name": "quickjs-zig",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A generic build engine to compile QuickJS scripts into standalone native binaries using Zig for multi-platform cross-compilation.",
   "type": "module",
   "main": "index.mjs",
@@ -10,14 +10,6 @@
   "scripts": {
     "postinstall": "node postinstall.mjs"
   },
-  "files": [
-    "index.mjs",
-    "build.mjs",
-    "quickjs/",
-    "bin/zig/",
-    "src/",
-    "scripts/"
-  ],
   "engines": {
     "node": ">=18.0.0"
   },
