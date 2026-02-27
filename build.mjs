@@ -26,17 +26,23 @@ const userPackageJson = JSON.parse(readFileSync(USER_PKG_PATH, 'utf8'));
 const customModules = userPackageJson.quickJs?.modules || {};
 const APP_NAME = userPackageJson.name || 'app';
 
+// Optimization flag from package.json
+const IS_OPTIMIZED = userPackageJson.quickJs?.optimization === true;
+
 // Input file from package.json or default to app/index.mjs
 const INPUT_FILE_RELATIVE = userPackageJson.quickJs?.input || 'app/index.mjs';
 
 /**
  * Recursively scan and transform imports to platform-specific ones.
- * Filters out files from other platforms and prevents duplicates.
+ * Filters out files from other platforms and ensures specific versions
+ * replace generic ones (like index.mjs) in the build folder.
  */
 function processDirectory(currentDir, targetDir, targetPlat) {
     if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
 
-    readdirSync(currentDir).forEach(file => {
+    const filesInSource = readdirSync(currentDir);
+
+    filesInSource.forEach(file => {
         const fullPath = path.join(currentDir, file);
         const destPath = path.join(targetDir, file);
 
@@ -56,17 +62,18 @@ function processDirectory(currentDir, targetDir, targetPlat) {
                 return;
             }
 
-            // 2. If it's a generic file, skip it if a platform-specific version exists in the same folder
+            // 2. Logic for generic files (like index.mjs):
+            // If a specific version (index.darwin.mjs) exists, we skip the generic one.
             if (!filePlat || !knownPlats.includes(filePlat)) {
                 const specFile = file.replace(/\.mjs$/, `.${targetPlat}.mjs`);
-                if (readdirSync(currentDir).includes(specFile)) {
+                if (filesInSource.includes(specFile)) {
                     return;
                 }
             }
 
             let content = readFileSync(fullPath, 'utf8');
 
-            // 3. Transform generic imports to platform-specific ones if they exist
+            // 3. Transform generic imports to platform-specific ones if they exist physically
             content = content.replace(/(import\s+.+?\s+from\s+['"])(.+?)\.mjs(['"])/g, (match, before, importPath, after) => {
                 const platFile = `${importPath}.${targetPlat}.mjs`;
                 const platformFullPath = path.resolve(currentDir, platFile);
@@ -185,8 +192,11 @@ const targets = [
 const stubPath = path.join(QUICKJS_DIR, 'repl_stub.c');
 writeFileSync(stubPath, `const unsigned char qjsc_repl[] = {0}; const unsigned int qjsc_repl_size = 0;`);
 
+// Feature optimization flags for qjsc
+const qjscFlags = IS_OPTIMIZED ? '-fno-eval -fno-regexp -fno-proxy -fno-map -fno-typedarray -fno-promise' : '';
+
 targets.forEach(t => {
-    console.log(`\n--- Compiling for: ${t.id} (Suffix: ${t.plat}) ---`);
+    console.log(`\n--- Compiling for: ${t.id} ---`);
 
     // --- PLATFORM SPECIFIC BUILD RESOLUTION ---
     const PLATFORM_BUILD_DIR = path.join(USER_CWD, 'build', t.id);
@@ -200,7 +210,15 @@ targets.forEach(t => {
 
     const TARGET_INPUT_ABS = path.join(PLATFORM_BUILD_DIR, path.basename(INPUT_FILE_RELATIVE));
 
-    const cmdBase = `${ZIG_PATH} cc -target ${t.id} -I${QUICKJS_DIR} -O2 ${t.cflags} -Wno-ignored-attributes -DCONFIG_VERSION=\\"${VERSION}\\" ${t.libs} -s`;
+    // Dynamic Optimization Flags
+    let optFlags = IS_OPTIMIZED ? '-O3 -flto' : '-O2';
+
+    // -fuse-ld=lld is mandatory for macOS LTO, but causes warnings on other platforms
+    if (IS_OPTIMIZED && t.plat === 'darwin') {
+        optFlags += ' -fuse-ld=lld';
+    }
+
+    const cmdBase = `${ZIG_PATH} cc -target ${t.id} -I${QUICKJS_DIR} ${optFlags} ${t.cflags} -Wno-ignored-attributes -DCONFIG_VERSION=\\"${VERSION}\\" ${t.libs} -s`;
 
     try {
         execSync(`${cmdBase} -o "${path.join(BIN_DIR, t.qjs)}" ${baseSources} ${stubPath} "${path.join(QUICKJS_DIR, 'qjs.c')}"`);
@@ -209,11 +227,11 @@ targets.forEach(t => {
 
         const tempC = path.join(BIN_DIR, `${t.id}_app.c`);
 
-        // Use host qjsc to compile the platform-specific source
-        execSync(`"${hostQjscPath}" -e -o "${tempC}" "${TARGET_INPUT_ABS}"`, { cwd: USER_CWD });
+        // Use host qjsc to compile the platform-resolved source
+        execSync(`"${hostQjscPath}" ${qjscFlags} -e -o "${tempC}" "${TARGET_INPUT_ABS}"`, { cwd: USER_CWD });
 
         execSync(`${cmdBase} -o "${path.join(DIST_DIR, t.app)}" "${tempC}" ${baseSources} -I${QUICKJS_DIR}`);
-        console.log(`✅ Binary built: ${t.app}`);
+        console.log(`✅ Binary built${IS_OPTIMIZED ? ' and optimized' : ''}: ${t.app}`);
     } catch (e) {
         console.error(`❌ Compilation failed for ${t.id}`);
         console.error(e.stderr?.toString() || e.message);
@@ -242,4 +260,5 @@ binFiles.forEach(file => {
 });
 if (existsSync(stubPath)) unlinkSync(stubPath);
 
-console.log("🚀 Build process complete. Platform sources kept in build/ subfolders.");
+console.log(`🚀 Build process complete. (Optimization: ${IS_OPTIMIZED ? 'ON' : 'OFF'})`);
+console.log("Platform sources kept in build/ subfolders.");

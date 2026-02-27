@@ -5,7 +5,7 @@ A high-performance build system for **QuickJS**, powered by the **Zig** compiler
 ## Features
 
 * **Zero Config Cross-Compilation**: Build for Windows, Linux, and macOS from any host (Intel or Apple Silicon).
-* **Zig-Powered**: Uses **Zig 0.15.2** as a C compiler for modern, safe, and highly optimized binaries.
+* **Zig-Powered Optimization**: Uses **Zig 0.15.2** with LTO (Link Time Optimization) to produce small binaries.
 * **Custom C Modules**: Easily inject and register your own C modules into the QuickJS engine.
 * **Native Windows Support**: Includes a custom `exec` implementation for Windows, bypassing typical QuickJS POSIX limitations.
 * **Platform-Specific Swapping**: Automatically replaces generic JS files with platform-specific ones (e.g., `index.mjs` → `index.darwin.mjs`) during build.
@@ -62,13 +62,14 @@ The build system supports platform-specific file resolution. This is useful when
 
 ## Configuration
 
-Configure your entry point and custom C modules in your project's `package.json`:
+Configure your entry point, optimization, and custom C modules in your project's `package.json`:
 
 ```json
 {
   "name": "my-app",
   "quickJs": {
     "input": "app/index.mjs",
+    "optimization": true,
     "modules": {
       "my_module": "src/my_module.c"
     }
@@ -78,7 +79,10 @@ Configure your entry point and custom C modules in your project's `package.json`
 ```
 
 * **`input`**: The entry point of your JavaScript application (defaults to `app/index.mjs`).
+* **`optimization`**: When `true`, enables **LTO**, aggressive inlining (`-O3`), and strips unused features like `eval` or `Promises` via `qjsc` flags.
 * **`modules`**: A key-value map of custom C modules (Module Name -> C Source Path).
+
+**Note**: The system always applies `-s` (strip symbols) regardless of the optimization flag to ensure no `.pdb` or debug tables are generated.
 
 ---
 
@@ -153,9 +157,9 @@ The build system generates binaries for the following platforms in the `dist/` f
 
 Zig is not just a language; it's a powerful C/C++ toolchain. It allows `quickjs-zig` to:
 
-* Cross-compile to Windows (MinGW) from macOS/Linux without installing complex toolchains.
-* Provide a consistent `libc` environment across different platforms.
-* Produce small, fast, and statically linked binaries.
+* **Cross-compile** to Windows (MinGW) or Linux from any host without installing complex toolchains.
+* **Size matters**: By using `-flto` and `-O3`, Zig can discard unused parts of the engine, bringing the footprint down by nearly 95% compared to Node.js standalone binaries.
+* **macOS LTO Support**: On Apple targets, we automatically force `-fuse-ld=lld` when optimized to ensure the LLVM Linker handles the bitcode correctly.
 
 ### Windows Patching
 
