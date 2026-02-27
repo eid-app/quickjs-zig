@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { writeFileSync, mkdirSync, unlinkSync, existsSync, readdirSync, cpSync, readFileSync, renameSync } from 'fs';
+import { writeFileSync, mkdirSync, unlinkSync, existsSync, readdirSync, cpSync, readFileSync, renameSync, statSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -7,6 +7,13 @@ import { fileURLToPath } from 'url';
 // --- PATH CONFIGURATION ---
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CWD = process.cwd();
+const PLATFORM = os.platform();
+
+// Clean global build directory at the very beginning
+const GLOBAL_BUILD_DIR = path.join(USER_CWD, 'build');
+if (existsSync(GLOBAL_BUILD_DIR)) {
+    rmSync(GLOBAL_BUILD_DIR, { recursive: true });
+}
 
 // Load the user project's package.json
 const USER_PKG_PATH = path.join(USER_CWD, 'package.json');
@@ -21,11 +28,62 @@ const APP_NAME = userPackageJson.name || 'app';
 
 // Input file from package.json or default to app/index.mjs
 const INPUT_FILE_RELATIVE = userPackageJson.quickJs?.input || 'app/index.mjs';
-const INPUT_FILE_ABS = path.resolve(USER_CWD, INPUT_FILE_RELATIVE);
 
-if (!existsSync(INPUT_FILE_ABS)) {
-    console.error(`❌ Error: Input file not found at ${INPUT_FILE_ABS}`);
-    process.exit(1);
+/**
+ * Recursively scan and transform imports to platform-specific ones.
+ * Filters out files from other platforms and prevents duplicates.
+ */
+function processDirectory(currentDir, targetDir, targetPlat) {
+    if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
+
+    readdirSync(currentDir).forEach(file => {
+        const fullPath = path.join(currentDir, file);
+        const destPath = path.join(targetDir, file);
+
+        if (statSync(fullPath).isDirectory()) {
+            return processDirectory(fullPath, destPath, targetPlat);
+        }
+
+        const isMjs = file.endsWith('.mjs') || file.endsWith('.js');
+        const knownPlats = ['win32', 'darwin', 'linux'];
+
+        if (isMjs) {
+            const parts = file.split('.');
+            const filePlat = parts.length > 2 ? parts[parts.length - 2] : null;
+
+            // 1. Skip files belonging to OTHER platforms
+            if (filePlat && knownPlats.includes(filePlat) && filePlat !== targetPlat) {
+                return;
+            }
+
+            // 2. If it's a generic file, skip it if a platform-specific version exists in the same folder
+            if (!filePlat || !knownPlats.includes(filePlat)) {
+                const specFile = file.replace(/\.mjs$/, `.${targetPlat}.mjs`);
+                if (readdirSync(currentDir).includes(specFile)) {
+                    return;
+                }
+            }
+
+            let content = readFileSync(fullPath, 'utf8');
+
+            // 3. Transform generic imports to platform-specific ones if they exist
+            content = content.replace(/(import\s+.+?\s+from\s+['"])(.+?)\.mjs(['"])/g, (match, before, importPath, after) => {
+                const platFile = `${importPath}.${targetPlat}.mjs`;
+                const platformFullPath = path.resolve(currentDir, platFile);
+
+                if (existsSync(platformFullPath)) {
+                    console.log(`✨ [${targetPlat}] Swapping import: ${importPath}.mjs -> ${platFile}`);
+                    return `${before}${importPath}.${targetPlat}.mjs${after}`;
+                }
+                return match;
+            });
+
+            writeFileSync(destPath, content);
+        } else {
+            // Copy assets and other files as is
+            cpSync(fullPath, destPath);
+        }
+    });
 }
 
 const QUICKJS_DIR = path.resolve(__dirname, 'quickjs');
@@ -46,13 +104,11 @@ if (!existsSync(BIN_DIR)) mkdirSync(BIN_DIR, { recursive: true });
 if (!existsSync(DIST_DIR)) mkdirSync(DIST_DIR, { recursive: true });
 
 // Detect the host architecture to find the correct qjsc binary
-const platform = os.platform();
 const arch = os.arch();
 let hostQjscName = '';
-
-if (platform === 'darwin') hostQjscName = (arch === 'arm64') ? 'qjsc_mac_arm' : 'qjsc_mac_intel';
-else if (platform === 'linux') hostQjscName = (arch === 'arm64' || arch === 'aarch64') ? 'qjsc_linux_arm' : 'qjsc_linux64';
-else if (platform === 'win32') hostQjscName = 'qjsc_win64.exe';
+if (PLATFORM === 'darwin') hostQjscName = (arch === 'arm64') ? 'qjsc_mac_arm' : 'qjsc_mac_intel';
+else if (PLATFORM === 'linux') hostQjscName = (arch === 'arm64' || arch === 'aarch64') ? 'qjsc_linux_arm' : 'qjsc_linux64';
+else if (PLATFORM === 'win32') hostQjscName = 'qjsc_win64.exe';
 
 const hostQjscPath = path.join(BIN_DIR, hostQjscName);
 
@@ -114,13 +170,13 @@ const baseSources = ['quickjs.c', 'libregexp.c', 'libunicode.c', 'cutils.c', 'qu
     .join(' ');
 
 const targets = [
-  { id: 'x86_64-windows-gnu', qjs: 'qjs_win64.exe', qjsc: 'qjsc_win64.exe', app: `${APP_NAME}_win64.exe`, libs: '-lm', cflags: '-D_GNU_SOURCE' },
-  { id: 'x86-windows-gnu',    qjs: 'qjs_win32.exe', qjsc: 'qjsc_win32.exe', app: `${APP_NAME}_win32.exe`, libs: '-lm', cflags: '-D_GNU_SOURCE' },
-  { id: 'x86_64-linux-gnu',   qjs: 'qjs_linux64',   qjsc: 'qjsc_linux64',   app: `${APP_NAME}_linux64`,   libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD' },
-  { id: 'x86-linux-gnu',     qjs: 'qjs_linux32',   qjsc: 'qjsc_linux32',   app: `${APP_NAME}_linux32`,   libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD' },
-  { id: 'aarch64-linux-gnu',  qjs: 'qjs_linux_arm64', qjsc: 'qjsc_linux_arm64', app: `${APP_NAME}_linux_arm64`, libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD' },
-  { id: 'aarch64-macos',      qjs: 'qjs_mac_arm',   qjsc: 'qjsc_mac_arm',   app: `${APP_NAME}_mac_arm`,   libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD' },
-  { id: 'x86_64-macos',       qjs: 'qjs_mac_intel', qjsc: 'qjsc_mac_intel', app: `${APP_NAME}_mac_intel`, libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD' }
+  { id: 'x86_64-windows-gnu', qjs: 'qjs_win64.exe', qjsc: 'qjsc_win64.exe', app: `${APP_NAME}_win64.exe`, libs: '-lm', cflags: '-D_GNU_SOURCE', plat: 'win32' },
+  { id: 'x86-windows-gnu',    qjs: 'qjs_win32.exe', qjsc: 'qjsc_win32.exe', app: `${APP_NAME}_win32.exe`, libs: '-lm', cflags: '-D_GNU_SOURCE', plat: 'win32' },
+  { id: 'x86_64-linux-gnu',   qjs: 'qjs_linux64',   qjsc: 'qjsc_linux64',   app: `${APP_NAME}_linux64`,   libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD', plat: 'linux' },
+  { id: 'x86-linux-gnu',      qjs: 'qjs_linux32',   qjsc: 'qjsc_linux32',   app: `${APP_NAME}_linux32`,   libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD', plat: 'linux' },
+  { id: 'aarch64-linux-gnu',  qjs: 'qjs_linux_arm64', qjsc: 'qjsc_linux_arm64', app: `${APP_NAME}_linux_arm64`, libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD', plat: 'linux' },
+  { id: 'aarch64-macos',      qjs: 'qjs_mac_arm',   qjsc: 'qjsc_mac_arm',   app: `${APP_NAME}_mac_arm`,   libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD', plat: 'darwin' },
+  { id: 'x86_64-macos',       qjs: 'qjs_mac_intel', qjsc: 'qjsc_mac_intel', app: `${APP_NAME}_mac_intel`, libs: '-lm -lpthread -ldl', cflags: '-D_GNU_SOURCE -DCONFIG_PTHREAD', plat: 'darwin' }
 ];
 
 // ==========================================================
@@ -130,7 +186,20 @@ const stubPath = path.join(QUICKJS_DIR, 'repl_stub.c');
 writeFileSync(stubPath, `const unsigned char qjsc_repl[] = {0}; const unsigned int qjsc_repl_size = 0;`);
 
 targets.forEach(t => {
-    console.log(`\n--- Compiling for: ${t.id} ---`);
+    console.log(`\n--- Compiling for: ${t.id} (Suffix: ${t.plat}) ---`);
+
+    // --- PLATFORM SPECIFIC BUILD RESOLUTION ---
+    const PLATFORM_BUILD_DIR = path.join(USER_CWD, 'build', t.id);
+    const inputBaseDir = path.dirname(path.resolve(USER_CWD, INPUT_FILE_RELATIVE));
+
+    if (existsSync(PLATFORM_BUILD_DIR)) {
+        rmSync(PLATFORM_BUILD_DIR, { recursive: true });
+    }
+
+    processDirectory(inputBaseDir, PLATFORM_BUILD_DIR, t.plat);
+
+    const TARGET_INPUT_ABS = path.join(PLATFORM_BUILD_DIR, path.basename(INPUT_FILE_RELATIVE));
+
     const cmdBase = `${ZIG_PATH} cc -target ${t.id} -I${QUICKJS_DIR} -O2 ${t.cflags} -Wno-ignored-attributes -DCONFIG_VERSION=\\"${VERSION}\\" ${t.libs} -s`;
 
     try {
@@ -139,9 +208,9 @@ targets.forEach(t => {
         console.log(`✅ Build tools generated.`);
 
         const tempC = path.join(BIN_DIR, `${t.id}_app.c`);
-        const relativeInput = path.relative(USER_CWD, INPUT_FILE_ABS);
 
-        execSync(`"${hostQjscPath}" -e -o "${tempC}" "${relativeInput}"`, { cwd: USER_CWD });
+        // Use host qjsc to compile the platform-specific source
+        execSync(`"${hostQjscPath}" -e -o "${tempC}" "${TARGET_INPUT_ABS}"`, { cwd: USER_CWD });
 
         execSync(`${cmdBase} -o "${path.join(DIST_DIR, t.app)}" "${tempC}" ${baseSources} -I${QUICKJS_DIR}`);
         console.log(`✅ Binary built: ${t.app}`);
@@ -172,4 +241,5 @@ binFiles.forEach(file => {
     }
 });
 if (existsSync(stubPath)) unlinkSync(stubPath);
-console.log("🚀 Build process complete.");
+
+console.log("🚀 Build process complete. Platform sources kept in build/ subfolders.");
