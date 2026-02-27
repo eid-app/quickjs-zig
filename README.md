@@ -8,6 +8,7 @@ A high-performance build system for **QuickJS**, powered by the **Zig** compiler
 * **Zig-Powered**: Uses **Zig 0.15.2** as a C compiler for modern, safe, and highly optimized binaries.
 * **Custom C Modules**: Easily inject and register your own C modules into the QuickJS engine.
 * **Native Windows Support**: Includes a custom `exec` implementation for Windows, bypassing typical QuickJS POSIX limitations.
+* **Platform-Specific Swapping**: Automatically replaces generic JS files with platform-specific ones (e.g., `index.mjs` → `index.darwin.mjs`) during build.
 * **Clean Source Management**: Automatically patches and restores QuickJS source files to keep the core library pristine.
 
 ---
@@ -34,6 +35,28 @@ npm install
 npm link
 
 ```
+
+---
+
+## Platform-Specific File Swapping
+
+The build system supports platform-specific file resolution. This is useful when you need different JS logic for different operating systems while maintaining a single development entry point for IDE completion.
+
+### How it works
+
+1. **Generic file**: Create a base file (e.g., `index.mjs` or `dialogs.mjs`). This is your reference for IDE completion and IntelliSense.
+2. **Specific files**: Create files with the platform suffix:
+* `filename.win32.mjs`
+* `filename.darwin.mjs`
+* `filename.linux.mjs`
+
+
+3. **Build Logic**:
+* The `build/` folder is cleaned at the start of each execution.
+* If a platform-specific version exists, the generic version is **excluded** from the build folder to avoid duplicates.
+* The script automatically rewrites `import` statements in your code to point to the correct suffix during the build process.
+
+
 
 ---
 
