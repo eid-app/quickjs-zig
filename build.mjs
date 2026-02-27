@@ -1,8 +1,8 @@
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { writeFileSync, mkdirSync, unlinkSync, existsSync, readdirSync, cpSync, readFileSync, renameSync, statSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import { fileURLToPath } from 'url';
 
 // --- PATH CONFIGURATION ---
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +24,17 @@ if (!existsSync(USER_PKG_PATH)) {
 
 const userPackageJson = JSON.parse(readFileSync(USER_PKG_PATH, 'utf8'));
 const customModules = userPackageJson.quickJs?.modules || {};
+
+for (const [name, relativePath] of Object.entries(customModules)) {
+    const absolutePath = path.resolve(USER_CWD, relativePath);
+    if (!existsSync(absolutePath)) {
+        console.error(`\n❌ Error: Custom module "${name}" source file not found!`);
+        console.error(`   Expected path: ${absolutePath}`);
+        console.error(`   Please check your package.json configuration.`);
+        process.exit(1);
+    }
+}
+
 const APP_NAME = userPackageJson.name || 'app';
 
 // Optimization flag from package.json
@@ -211,12 +222,7 @@ targets.forEach(t => {
     const TARGET_INPUT_ABS = path.join(PLATFORM_BUILD_DIR, path.basename(INPUT_FILE_RELATIVE));
 
     // Dynamic Optimization Flags
-    let optFlags = IS_OPTIMIZED ? '-O3 -flto' : '-O2';
-
-    // -fuse-ld=lld is mandatory for macOS LTO, but causes warnings on other platforms
-    if (IS_OPTIMIZED && t.plat === 'darwin') {
-        optFlags += ' -fuse-ld=lld';
-    }
+    let optFlags = IS_OPTIMIZED && 'darwin' !== t.plat ? '-O3 -flto' : '-O2';
 
     const cmdBase = `${ZIG_PATH} cc -target ${t.id} -I${QUICKJS_DIR} ${optFlags} ${t.cflags} -Wno-ignored-attributes -DCONFIG_VERSION=\\"${VERSION}\\" ${t.libs} -s`;
 
