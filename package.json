@@ -1,0 +1,42 @@
+{
+  "name": "quickjs-zig",
+  "version": "1.0.0",
+  "description": "A generic build engine to compile QuickJS scripts into standalone native binaries using Zig for multi-platform cross-compilation.",
+  "type": "module",
+  "main": "index.mjs",
+  "bin": {
+    "quickjs-zig": "index.mjs"
+  },
+  "scripts": {
+    "postinstall": "node postinstall.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "build.mjs",
+    "quickjs/",
+    "bin/zig/",
+    "src/",
+    "scripts/"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "quickjs",
+    "zig",
+    "compiler",
+    "native-binaries",
+    "cross-compilation",
+    "c-modules"
+  ],
+  "author": "eid-app",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eid-app/quickjs-zig.git"
+  },
+  "bugs": {
+    "url": "https://github.com/eid-app/quickjs-zig/issues"
+  },
+  "homepage": "https://github.com/eid-app/quickjs-zig#readme"
+}
